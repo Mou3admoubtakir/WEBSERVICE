@@ -1,0 +1,165 @@
+function ztest_webservice.
+*"----------------------------------------------------------------------
+*"*"Interface locale :
+*"  IMPORTING
+*"     VALUE(I_MATNR) TYPE  MATNR
+*"  EXPORTING
+*"     VALUE(ET_TEST) TYPE  ZTTEST
+*"----------------------------------------------------------------------
+
+  data: ls_makt        type makt,
+        ls_ztest       type ztest,
+        lo_http_client type ref to if_http_client,
+*        lo_http_client_post type ref to if_http_client,
+        lv_url         type string,
+        lv_url_token   type string,
+        lv_payload     type string,
+        lv_response    type string,
+        lv_status_code type i,
+        lv_status_text type string.
+
+  data: lv_token           type string,
+        lv_get_status_code type i,
+        lv_get_status_text type string,
+        lv_get_response    type string.
+
+
+  clear: ls_ztest, et_test.
+
+  select single * from makt into @ls_makt
+    where matnr = @i_matnr.
+  if sy-subrc = 0.
+    ls_ztest-article = ls_makt-matnr.
+    ls_ztest-description = ls_makt-maktx.
+    ls_ztest-message = 'Success'.
+*  APPEND ls_ztest to ET_TEST.
+  else.
+    ls_ztest-article     = i_matnr.
+    ls_ztest-message     = 'Error'.
+    append ls_ztest to et_test.
+
+  endif.
+
+  lv_url = 'http://3.123.183.147:50000/sap/opu/odata/sap/ZWEBSERVICETEST_SRV_01/webServiceSet'.
+  lv_url_token = 'http://3.123.183.147:50000/sap/opu/odata/sap/ZWEBSERVICETEST_SRV_01/'.
+  lv_payload = |\{"Article":"{ ls_ztest-article }","Description":"{ ls_ztest-description }","Message":"{ ls_ztest-message }"\}|.
+
+
+  "--------------------------------------------------
+  " STEP 1 : FETCH CSRF TOKEN
+  "--------------------------------------------------
+  call method cl_http_client=>create_by_url
+    exporting
+      url                = lv_url
+    importing
+      client             = lo_http_client
+    exceptions
+      argument_not_found = 1
+      plugin_not_active  = 2
+      internal_error     = 3
+      others             = 4.
+
+  if sy-subrc <> 0 or lo_http_client is initial.
+    clear ls_ztest.
+    ls_ztest-article = i_matnr.
+    ls_ztest-message = 'HTTP client creation failed for token'.
+    append ls_ztest to et_test.
+    return.
+  endif.
+
+  lo_http_client->propertytype_accept_cookie = if_http_client=>co_enabled.
+
+  lo_http_client->request->set_method( if_http_request=>co_request_method_get ).
+  lo_http_client->request->set_header_field(
+    name  = 'x-csrf-token'
+    value = 'Fetch' ).
+  lo_http_client->request->set_header_field(
+    name  = 'Accept'
+    value = 'application/json' ).
+
+  call method lo_http_client->send
+    exceptions
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      others                     = 3.
+
+
+  call method lo_http_client->receive
+    exceptions
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      http_processing_failed     = 3
+      others                     = 4.
+
+  lo_http_client->response->get_status(
+    importing
+      code   = lv_get_status_code
+      reason = lv_get_status_text ).
+
+  lv_get_response = lo_http_client->response->get_cdata( ).
+
+  lo_http_client->response->get_header_field(
+    exporting
+      name  = 'x-csrf-token'
+    receiving
+      value = lv_token ).
+
+  if lv_token is initial.
+    clear ls_ztest.
+    ls_ztest-article = i_matnr.
+    ls_ztest-message = |No CSRF token returned. GET status { lv_get_status_code } { lv_get_status_text }|.
+    append ls_ztest to et_test.
+    lo_http_client->close( ).
+    return.
+  endif.
+
+
+  "--------------------------------------------------
+  " STEP 2 : POST TO CREATE ENTITY
+  "--------------------------------------------------
+  lo_http_client->refresh_request( ).
+
+lo_http_client->request->set_method( if_http_request=>co_request_method_post ).
+lo_http_client->request->set_header_field( name = 'x-csrf-token' value = lv_token ).
+lo_http_client->request->set_header_field( name = 'Content-Type' value = 'application/json' ).
+lo_http_client->request->set_header_field( name = 'Accept' value = 'application/json' ).
+lo_http_client->request->set_cdata( lv_payload ).
+
+  call method lo_http_client->send
+    exceptions
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      others                     = 3.
+
+
+
+  call method lo_http_client->receive
+    exceptions
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      http_processing_failed     = 3
+      others                     = 4.
+
+
+  lo_http_client->response->get_status(
+    importing
+      code   = lv_status_code
+      reason = lv_status_text ).
+
+  lv_response = lo_http_client->response->get_cdata( ).
+
+  clear ls_ztest.
+  ls_ztest-article     = ls_makt-matnr.
+  ls_ztest-description = ls_makt-maktx.
+
+  if lv_status_code = 201 or lv_status_code = 200.
+    ls_ztest-message = 'Created successfully'.
+  else.
+    ls_ztest-message = |Error { lv_status_code } - { lv_status_text } : { lv_response }|.
+  endif.
+
+  append ls_ztest to et_test.
+
+  lo_http_client->close( ).
+
+endfunction.
