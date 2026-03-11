@@ -17,17 +17,22 @@ function ztest_webservice.
         lv_response    type string,
         lv_status_code type i,
         lv_status_text type string.
-
+  DATA lv_matnr TYPE c LENGTH 18.
   data: lv_token           type string,
         lv_get_status_code type i,
         lv_get_status_text type string,
         lv_get_response    type string.
 
-
   clear: ls_ztest, et_test.
 
+CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        INPUT  = I_MATNR
+      IMPORTING
+        OUTPUT = lv_matnr.
+
   select single * from makt into @ls_makt
-    where matnr = @i_matnr.
+    where matnr = @lv_matnr.
   if sy-subrc = 0.
     ls_ztest-article = ls_makt-matnr.
     ls_ztest-description = ls_makt-maktx.
@@ -35,7 +40,7 @@ function ztest_webservice.
 *  APPEND ls_ztest to ET_TEST.
   else.
     ls_ztest-article     = i_matnr.
-    ls_ztest-message     = 'Error'.
+    ls_ztest-message     = 'Error sap database !'.
     append ls_ztest to et_test.
 
   endif.
@@ -62,10 +67,14 @@ function ztest_webservice.
   if sy-subrc <> 0 or lo_http_client is initial.
     clear ls_ztest.
     ls_ztest-article = i_matnr.
-    ls_ztest-message = 'HTTP client creation failed for token'.
+    ls_ztest-message = 'HTTP client creation failed'.
     append ls_ztest to et_test.
     return.
   endif.
+
+  lo_http_client->authenticate( "Mandatory if youre using TWO http request
+  username = 'AEROWXECM'
+  password = 'Aerow2025!' ).
 
   lo_http_client->propertytype_accept_cookie = if_http_client=>co_enabled.
 
@@ -107,7 +116,7 @@ function ztest_webservice.
   if lv_token is initial.
     clear ls_ztest.
     ls_ztest-article = i_matnr.
-    ls_ztest-message = |No CSRF token returned. GET status { lv_get_status_code } { lv_get_status_text }|.
+    ls_ztest-message = |No CSRF token returned. GET status { lv_get_status_code } { lv_get_status_text }|."Debugs <
     append ls_ztest to et_test.
     lo_http_client->close( ).
     return.
