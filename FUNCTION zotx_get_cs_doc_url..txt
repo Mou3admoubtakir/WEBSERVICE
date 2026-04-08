@@ -1,0 +1,236 @@
+FUNCTION zotx_get_cs_doc_url.
+*"----------------------------------------------------------------------
+*"*"Interface locale :
+*"  IMPORTING
+*"     REFERENCE(SAP_OBJECT) TYPE  SAEANWDID
+*"     REFERENCE(OBJECT_ID) TYPE  SAEOBJID
+*"  CHANGING
+*"     REFERENCE(IT_URL) TYPE  STRING_TABLE
+*"  EXCEPTIONS
+*"      NO_DOC_FOUND
+*"      ERROR_GET_NODE
+*"      ERROR_INI_OTX
+*"      ERROR_UNIQUE_NAME_NOT_FOUND
+*"      ERROR_SYSTEM_FAULT
+*"      APPLICATION_FAULT
+*"      UNIQUE_NAME_NOT_FOUND
+*"----------------------------------------------------------------------
+  TYPES : BEGIN OF ty_result_tab,
+            line TYPE char512.
+  TYPES END OF ty_result_tab.
+  "Type objet SAP(10); ID objet SAP(50); ID document CS(10); Version document(2-3); Content repository(2); DocID(40)
+  TYPES : BEGIN OF ty_result_parsed,
+            sap_object TYPE saeanwdid,
+            object_id  TYPE saeobjid,
+            cs_node_id TYPE char19,
+            version    TYPE char3,
+            archiv_id  TYPE saearchivi,
+            arc_doc_id TYPE saeardoid.
+  TYPES END OF ty_result_parsed.
+
+
+  DATA :
+    lv_signature_uri(6000)            TYPE  c,
+    lv_low                         TYPE tvarvc-low,
+    lv_err_txt                     TYPE string,
+    lo_otx_cx_rm_rest_cl_exception TYPE REF TO /otx/cx_rm_rest_cl_exception,
+    ls_otx_rm_telib                TYPE   /otx/rm_telib,
+    ls_otx_rm_tpwsc                TYPE   /otx/rm_tpwsc,
+    lt_result_parsed               TYPE  TABLE OF ty_result_parsed,
+    ls_result_parsed               TYPE ty_result_parsed,
+    lt_result                      TYPE TABLE OF  ty_result_tab,
+    ls_result                      TYPE    ty_result_tab,
+    lo_otxco_rm_wsw_ecmlink        TYPE REF TO /otx/co_rm_wsw_ecmlink,
+    ls_otxrm_wsw_unique_name_info  TYPE /otx/rm_wsw_unique_name_info,
+    ls_input                       TYPE /otx/rm_wsw_get_node_ids_of_u2,
+    ls_output	                     TYPE /otx/rm_wsw_get_node_ids_of_u1,
+
+    lt_it_url                      TYPE  string_table,
+    lv_crep_id                     TYPE char10,
+    lv_doc_id                      TYPE char40,
+    lv_absolute_uri                TYPE  saeuri,
+    lo_zotxrm_rest_cl_cs_v2        TYPE REF TO  zotxrm_rest_cl_cs_v2,
+    lv_pe_result                   TYPE string,
+    lv_pi_query_string             TYPE string,
+    lv_pi_node_id                  TYPE /otx/rm_de_cs_node_id.
+
+  " récupérer le résultat du web report en fonction  :
+  " de l'id du web report, du type d'objet SAP et de l'id d'objet SAP
+  SELECT SINGLE * FROM /otx/rm_tpwsc INTO  ls_otx_rm_tpwsc WHERE objtype =  sap_object.
+  IF sy-subrc <> 0.
+    RAISE error_ini_otx.
+  ENDIF.
+
+  SELECT SINGLE * FROM /otx/rm_telib INTO ls_otx_rm_telib WHERE les_id = ls_otx_rm_tpwsc-les_id.
+  IF sy-subrc <> 0.
+    RAISE error_ini_otx.
+  ENDIF.
+
+  TRY.
+      CREATE OBJECT lo_otxco_rm_wsw_ecmlink
+        EXPORTING
+          logical_port_name = ls_otx_rm_telib-lp_ecmlink_srv.
+    CATCH cx_ai_system_fault .
+
+      RAISE error_system_fault.
+  ENDTRY.
+
+  FREE : ls_input,ls_output,lv_low .
+
+  SELECT SINGLE low FROM tvarvc INTO lv_low  WHERE name = 'ZOTX_UNIQUENAME_CERT_BB'.
+  IF sy-subrc = 0.
+    APPEND  lv_low TO  ls_input-parameters-unique_names .
+  ELSE.
+    RAISE unique_name_not_found.
+  ENDIF.
+
+
+  TRY.
+      CALL METHOD lo_otxco_rm_wsw_ecmlink->get_node_ids_of_unique_names
+        EXPORTING
+          input  = ls_input
+        IMPORTING
+          output = ls_output.
+    CATCH cx_ai_system_fault .
+
+      RAISE error_system_fault.
+    CATCH cx_ai_application_fault .
+
+      RAISE application_fault.
+  ENDTRY.
+
+  FREE:  ls_otxrm_wsw_unique_name_info,  lv_pi_node_id, lv_pi_query_string , lv_pe_result  .
+
+  READ TABLE  ls_output-parameters-get_node_ids_of_unique_names_r INTO
+  ls_otxrm_wsw_unique_name_info INDEX 1.
+
+
+
+  lv_pi_node_id = ls_otxrm_wsw_unique_name_info-node_id1.
+
+  IF lv_pi_node_id IS INITIAL OR lv_pi_node_id = 0.
+
+    RAISE error_unique_name_not_found.
+
+  ENDIF.
+
+  lv_pi_query_string = '/output?format=webreport&inputlabel1=?1&inputlabel2=?2'.
+
+  REPLACE '?1' INTO lv_pi_query_string WITH object_id.
+  REPLACE '?2' INTO lv_pi_query_string WITH sap_object.
+  CONDENSE lv_pi_query_string.
+
+  TRY.
+      CREATE OBJECT lo_zotxrm_rest_cl_cs_v2
+        EXPORTING
+          pi_elib_id = 'SAP_XECM'.
+    CATCH /otx/cx_rm_wsc .
+
+      RAISE error_ini_otx.
+
+  ENDTRY.
+
+  TRY.
+
+      CALL METHOD lo_zotxrm_rest_cl_cs_v2->/otx/rm_rest_if_cs_v2~get_node
+        EXPORTING
+          pi_node_id      = lv_pi_node_id
+          pi_query_string = lv_pi_query_string
+        IMPORTING
+          pe_result       = lv_pe_result.
+
+    CATCH /otx/cx_rm_rest_cl_exception INTO lo_otx_cx_rm_rest_cl_exception  .
+      lv_err_txt = lo_otx_cx_rm_rest_cl_exception->get_text( ).
+
+      RAISE error_get_node.
+  ENDTRY.
+
+  " parser le résultat du  web report
+  FREE : lt_result.
+  SPLIT lv_pe_result AT cl_abap_char_utilities=>newline INTO TABLE  lt_result  .
+
+  LOOP AT  lt_result INTO ls_result.
+
+    SPLIT ls_result AT ';' INTO
+    ls_result_parsed-sap_object
+    ls_result_parsed-object_id
+    ls_result_parsed-cs_node_id
+    ls_result_parsed-version
+    ls_result_parsed-archiv_id
+    ls_result_parsed-arc_doc_id.
+
+    IF ls_result_parsed-arc_doc_id <> '?' AND  ls_result_parsed-arc_doc_id  IS NOT INITIAL." ? cela veut dire qu'il n'y a pas de document archivé récupéré. si vide cela veut dire qu'il y une erreur
+      APPEND ls_result_parsed TO lt_result_parsed.
+    ENDIF.
+
+  ENDLOOP.
+
+  IF lt_result_parsed[] IS INITIAL.
+    RAISE no_doc_found.
+  ENDIF.
+
+  FREE : lt_it_url.
+
+  " pour chaque Achive logique et id de document générer une url signé
+  LOOP AT lt_result_parsed INTO ls_result_parsed.
+
+    FREE : lv_crep_id,  lv_doc_id.
+
+    lv_crep_id =  ls_result_parsed-archiv_id.
+    lv_doc_id =  ls_result_parsed-arc_doc_id.
+
+    CALL FUNCTION 'SCMS_URL_GENERATE'
+      EXPORTING
+        command         = 'docGet'
+        contrep         = lv_crep_id
+        docid           = lv_doc_id
+        accessmode      = 'r'
+      IMPORTING
+        absolute_uri    = lv_absolute_uri
+      EXCEPTIONS
+        error_parameter = 1
+        error_signature = 2
+        OTHERS          = 3.
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ELSE.
+*      CALL FUNCTION 'SCMS_URL_SIGN'
+*        EXPORTING
+*          uri_for_signature = lv_absolute_uri
+**         CERTIFICATE       = ' '
+**         EXPIRATION        =
+**         DURATION          = '020000'
+**         SIGNATURE         = 'X'
+*        IMPORTING
+**         EOSTR_SIGNED_DATA_L       =
+*          signature_uri     = lv_signature_uri
+**       TABLES
+**         IT_OSTR_SIGNED_DATA       =
+*        EXCEPTIONS
+*          error_signature   = 1
+*          error_parameter   = 2
+*          OTHERS            = 3.
+*      IF sy-subrc <> 0.
+** Implement suitable error handling here
+*
+*      ELSE.
+*
+*        CONCATENATE lv_absolute_uri lv_signature_uri INTO lv_absolute_uri .
+        APPEND lv_absolute_uri TO lt_it_url.
+*      ENDIF.
+
+    ENDIF.
+
+
+
+  ENDLOOP.
+
+  IF lt_it_url[] IS INITIAL.
+
+    RAISE no_doc_found.
+
+  ENDIF.
+
+  it_url[] = lt_it_url[].
+
+ENDFUNCTION.
